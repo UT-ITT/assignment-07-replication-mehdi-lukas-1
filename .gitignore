@@ -36,3 +36,6 @@ build/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Presentation folder (local only)
+paper_presentation/

@@ -78,7 +78,7 @@ def arc_coverage(pts: np.ndarray, cx: float, cy: float) -> float:
 
 class TraceMatch:
 
-    def __init__(self, W=10, min_displacement=4):
+    def __init__(self, W=38, min_displacement=4):
         self.W = W
         self.min_displacement = min_displacement
 

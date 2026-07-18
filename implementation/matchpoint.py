@@ -2,17 +2,19 @@ import cv2
 import time
 import numpy as np
 
-from trace_match import TraceMatch
-from widgets import Orbit, Target
-from tracking import MedianFlowTracker, initialise_roi
-
 import globals
+
+from trace_match import TraceMatch
+from tracking import MedianFlowTracker, initialise_roi
+from widgets import Orbit
+from menus import TargetMenu, DragMenu
 
 cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     raise RuntimeError("Cannot open webcam (device 0).")
 
 cap.set(cv2.CAP_PROP_FPS, 30)
+
 CAM_W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 CAM_H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
@@ -24,65 +26,67 @@ print("-" * 60)
 
 class Matchpoint:
 
-    def __init__(self, matching_widget = None):
+    def __init__(self):
         self.state = 'matching'
-        self.matching_widget = matching_widget
         self.trace_match = TraceMatch()
-        self.orbit = Orbit(CAM_W//2, CAM_H//2)
         self.frame_rate = 30.0
         self.frame_time = time.time()
         self.prev_gray = None
         self.debug = False
 
-        # TODO: Replace with more general method
-        self.targets   = self._make_targets()
+        # Interaction menus/orbits
+        self.orbits = [
+            (Orbit(1 * CAM_W//4, CAM_H//2), TargetMenu(CAM_W, CAM_H)),
+            (Orbit(3 * CAM_W//4, CAM_H//2, inverted=True), DragMenu(CAM_W, CAM_H))
+        ]
 
-    def _make_targets(self) -> list:
-        cx, cy = CAM_W // 2, CAM_H // 2
-        R      = 120
-        return [Target(int(cx + R * np.cos(i * np.pi / 2)),
-                       int(cy + R * np.sin(i * np.pi / 2)),
-                       r=45, label=lbl)
-                for i, lbl in enumerate(["A", "B", "C", "D"])]
-
-    # TODO: Replace
-    def _put_hint(self, canvas: np.ndarray, text: str):
-        fs = 0.55
-        tw = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, fs, 1)[0][0]
-        cv2.putText(canvas, text, ((CAM_W - tw) // 2, CAM_H - 28),
-                    cv2.FONT_HERSHEY_SIMPLEX, fs, globals.C_DIM, 1, cv2.LINE_AA)
+    def _draw_info(self, frame: np.ndarray, text: str):
+        tw = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, globals.FONT_SIZE, 1)[0][0]
+        cv2.putText(frame, text, ((CAM_W - tw) // 2, CAM_H - 28),
+                    cv2.FONT_HERSHEY_SIMPLEX, globals.FONT_SIZE, globals.C_DIM, 1, cv2.LINE_AA)
 
     def reset(self):
         self.state        = 'matching'
         self.roi_tracker  = None
         self.cursor       = None
+
+        if self.menu is not None:
+            self.menu.reset()
+            self.menu = None
+
         self.trace_match = TraceMatch()
-        for t in self.targets:
-            t.dwell_t0  = None
-            t.activated = False
         print("[reset]  back to matching state")
         pass
 
     def _run_matching(self, gray: np.ndarray, frame: np.ndarray):
         # Track features
         candidates = self.trace_match.track_features(gray)
-        self.orbit.draw(frame)
-        self._put_hint(frame,
+
+        # Draw orbits + bottom text
+        for orbit, _ in self.orbits:
+            orbit.draw(frame)
+            
+        self._draw_info(frame,
             "Mirror the orbiting dot with any body movement to acquire a pointer")
 
+        # Draw features in Debug Mode
         if (self.debug):
-            frame = self.trace_match.draw_features(frame, candidates)
+            self.trace_match.draw_features(frame, candidates)
 
-        # Find matches using pearson and ransac
-        matches = self.trace_match.find_matches(candidates, [self.orbit], self.frame_rate, self.frame_time)
+        # Find the features/circles that matche
+        # the motion of the orbits
+        matches = self.trace_match.find_matches(candidates, [orbit for orbit, _ in self.orbits], self.frame_rate, self.frame_time)
         if not matches or self.prev_gray is None:
             return frame
 
-        m = matches[0]   # take first (all are valid; one is sufficient)
+        # Take the feature/match with the smallest fit error 
+        m = min(matches, key=lambda m: m['circle'][2])
+        tid    = m['tid']
         hist   = m['history']
         circle = m['circle']
         _, _, r_fit, _ = circle
         
+        # Get Region of Interest from match
         roi = initialise_roi(self.prev_gray, gray, [hist], CAM_W, CAM_H)
         if roi is None:
             return
@@ -95,45 +99,51 @@ class Matchpoint:
         roi_cy = roi[1] + roi[3] / 2.0
         start  = (float(np.clip(roi_cx, 0, CAM_W - 1)),
                   float(np.clip(roi_cy, 0, CAM_H - 1)))
+        self.cursor = (int(start[0]), int(start[1]))
 
+        # Initialize MedianFlowTracker
         self.roi_tracker = MedianFlowTracker(
             roi, cd_gain, gray, CAM_W, CAM_H, start)
-        self.cursor = (int(start[0]), int(start[1]))
+
+        # Initialize menu
+        self.menu = self.orbits[tid][1]
+        
         self.state  = 'coupled'
         print(f"[coupled]  roi={roi}  r={r_fit:.1f}px  cd_gain={cd_gain:.2f}")
 
-        return frame
-
     def _run_coupled(self, gray: np.ndarray, frame: np.ndarray):
-        if self.roi_tracker is None:
+        # Reset if Tracker or menu are missing/inactive
+        if self.roi_tracker is None or self.menu is None or not self.menu.is_active():
             self.reset()
-            return frame
+            return
 
+        # Update cursor based on tracker
         cx, cy = self.roi_tracker.update(gray, CAM_W, CAM_H)
         self.cursor = (int(cx), int(cy))
 
-        for tgt in self.targets:
-            tgt.update(self.cursor)
-            tgt.draw(frame)
+        # Handle menu of orbit
+        self.menu.update(self.cursor)
+        self.menu.draw(frame)
 
         # Cursor crosshair
-        frame = cv2.circle(frame, self.cursor, 16, globals.C_CURSOR,    -1, cv2.LINE_AA)
-        frame = cv2.circle(frame, self.cursor, 20, globals.C_CURSOR_RIM,  2, cv2.LINE_AA)
+        cv2.circle(frame, self.cursor, 16, globals.C_CURSOR,    -1, cv2.LINE_AA)
+        cv2.circle(frame, self.cursor, 20, globals.C_CURSOR_RIM,  2, cv2.LINE_AA)
 
+        # Draw Region of Interest in Debug Mode
         if self.debug:
             rx, ry, rw, rh = self.roi_tracker.roi
             p1 = (int(rx), int(ry))
             p2 = (int(rx + rw), int(ry + rh))
             frame = cv2.rectangle(frame, p1, p2, globals.C_ROI_DBG, 1)
 
-        self._put_hint(frame,
+        # Draw info text
+        self._draw_info(frame,
             "Move to control cursor  |  Hover a target to select  |  Still = release")
 
+        # Reset/Decouple on idle
         if self.roi_tracker.is_idle():
             print("[decoupled]  idle timeout")
             self.reset()
-
-        return frame
 
     def run(self, frame: np.ndarray):
         # Preprocessing
@@ -141,33 +151,33 @@ class Matchpoint:
         gray = cv2.GaussianBlur(gray, (5,5), 0)
 
         # Make image 20% less bright
-        frame = cv2.multiply(frame, 0.2)
+        cv2.multiply(frame, 0.2, dst=frame)
 
+        # Run matching/coupled state logic
         match self.state:
             case 'matching':
-                frame = self._run_matching(gray, frame)       
+                self._run_matching(gray, frame)       
             case _:
-                frame = self._run_coupled(gray, frame)
+                self._run_coupled(gray, frame)
 
-        # Calculate soomthed framerate/frametime
+        # Calculate smoothed framerate/frametime
         current_frame_time = time.time()
         frame_delta = current_frame_time - self.frame_time
         self.frame_rate = (1 / frame_delta if frame_delta > 0 else 1/30) + 0.1 * self.frame_rate
         self.frame_time = current_frame_time
         self.prev_gray = gray
 
-        return frame
-
     def draw_hud(self, frame: np.ndarray):
+        # Draw "Matchpoint | {STATE} | {FPS} HUD"
         label = "MATCHING" if self.state == 'matching' else "COUPLED "
         txt   = f"MatchPoint  |  {label}  |  {self.frame_rate:.0f} fps"
-        frame = cv2.putText(frame, txt, (20, 36),
+        cv2.putText(frame, txt, (20, 36),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.75, globals.C_GREY, 2, cv2.LINE_AA)
+        
+        # Draw Debug indicator
         if self.debug:
-            frame = cv2.putText(frame, "DEBUG", (20, 62),
+            cv2.putText(frame, "DEBUG", (20, 62),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, globals.C_ORBIT_DOT, 1, cv2.LINE_AA)
-
-        return frame
 
 matchpoint = Matchpoint()
 
@@ -191,12 +201,13 @@ while True:
     # mirror for natural use
     frame = cv2.flip(frame, 1)
 
-    # Do the background thingy
+    # Run matchpoint algorithm
+    matchpoint.run(frame)
+    matchpoint.draw_hud(frame)
 
-    frame = matchpoint.run(frame)
-
-    frame = matchpoint.draw_hud(frame)
+    # Show application state
     cv2.imshow("MatchPoint", frame)
 
+# Release Resource upon exit
 cap.release()
 cv2.destroyAllWindows()

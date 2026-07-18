@@ -3,23 +3,10 @@ import math
 import time
 import numpy as np
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  ORBIT WIDGET
-# ═════════════════════════════════════════════════════════════════════════════
-
-#from globals import ORBIT_R, ORBIT_DOT_R, ORBIT_T
-
-# ── Orbit widget ──────────────────────────────────────────────────────────
-ORBIT_R     = 55              # radius of the orbit path (px, display coords)
-ORBIT_DOT_R = 13              # radius of the orbiting dot (px)
-ORBIT_T     = 2.5             # revolution period (seconds)
-C_ORBIT_RING = ( 55, 185,  55)
-C_ORBIT_DOT  = ( 20, 235,  20)
-C_TGT_IDLE   = ( 55,  55, 205)
-C_TGT_DWELL  = (  0, 185, 255)
-C_TGT_DONE   = (  0, 240,  80)
-C_WHITE      = (255, 255, 255)
-DWELL_TIME = 0.8              # seconds to dwell over a target to activate it
+from globals import ORBIT_R, ORBIT_T, ORBIT_DOT_R
+from globals import C_ORBIT_RING, C_ORBIT_DOT
+from globals import C_TGT_IDLE, C_TGT_DWELL, C_TGT_DONE, C_WHITE
+from globals import DWELL_TIME
 
 class Orbit:
     """
@@ -30,10 +17,10 @@ class Orbit:
     """
 
     def __init__(self, cx: int, cy: int,
-                 radius: int = ORBIT_R, period: float = ORBIT_T):
+                 radius: int = ORBIT_R, period: float = ORBIT_T, inverted=False):
         self.cx, self.cy = cx, cy
         self.radius      = radius
-        self.period      = period
+        self.period      = -period if inverted else period
         self._t0         = time.time()   # phase reference
 
     # ── reference signal helpers ──────────────────────────────────────────
@@ -63,16 +50,15 @@ class Orbit:
         return (int(self.cx + self.radius * math.cos(a)),
                 int(self.cy + self.radius * math.sin(a)))
 
-    def draw(self, canvas: np.ndarray):
+    def draw(self, frame: np.ndarray):
         # outer ring
-        canvas = cv2.circle(canvas, (self.cx, self.cy),
+        cv2.circle(frame, (self.cx, self.cy),
                    self.radius, C_ORBIT_RING, 2, cv2.LINE_AA)
         # centre marker
-        canvas = cv2.circle(canvas, (self.cx, self.cy), 5, C_ORBIT_RING, -1, cv2.LINE_AA)
+        cv2.circle(frame, (self.cx, self.cy), 5, C_ORBIT_RING, -1, cv2.LINE_AA)
         # orbiting dot
-        canvas = cv2.circle(canvas, self._dot_pos(),
+        cv2.circle(frame, self._dot_pos(),
                    ORBIT_DOT_R, C_ORBIT_DOT, -1, cv2.LINE_AA)
-        return canvas
 
 class Target:
     """
@@ -99,18 +85,18 @@ class Target:
         else:
             self.dwell_t0 = None
 
-    def draw(self, canvas: np.ndarray):
+    def draw(self, frame: np.ndarray):
         if self.activated:
-            cv2.circle(canvas, (self.cx, self.cy), self.r, C_TGT_DONE, -1, cv2.LINE_AA)
-            cv2.circle(canvas, (self.cx, self.cy), self.r, C_WHITE,    2,  cv2.LINE_AA)
+            cv2.circle(frame, (self.cx, self.cy), self.r, C_TGT_DONE, -1, cv2.LINE_AA)
+            cv2.circle(frame, (self.cx, self.cy), self.r, C_WHITE,    2,  cv2.LINE_AA)
         else:
             frac = 0.0
             if self.dwell_t0 is not None:
                 frac = min(1.0, (time.time() - self.dwell_t0) / DWELL_TIME)
             col = C_TGT_DWELL if frac > 0 else C_TGT_IDLE
-            cv2.circle(canvas, (self.cx, self.cy), self.r, col, 2, cv2.LINE_AA)
+            cv2.circle(frame, (self.cx, self.cy), self.r, col, 2, cv2.LINE_AA)
             if frac > 0:
-                cv2.ellipse(canvas, (self.cx, self.cy),
+                cv2.ellipse(frame, (self.cx, self.cy),
                             (self.r + 8, self.r + 8), -90, 0, int(frac * 360),
                             C_TGT_DWELL, 5, cv2.LINE_AA)
 
@@ -119,6 +105,6 @@ class Target:
             size = cv2.getTextSize(self.label, cv2.FONT_HERSHEY_SIMPLEX, fs, 2)[0]
             tx   = self.cx - size[0] // 2
             ty   = self.cy + size[1] // 2
-            cv2.putText(canvas, self.label, (tx, ty),
+            cv2.putText(frame, self.label, (tx, ty),
                         cv2.FONT_HERSHEY_SIMPLEX, fs, C_WHITE, 2, cv2.LINE_AA)
 

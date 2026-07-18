@@ -8,13 +8,18 @@ from scipy.stats import pearsonr
 # Import globals
 from globals import DEDUPE_WIN, MOTION_THRESHOLD, PEARSON_THRESH, MIN_ARC
 from globals import RANSAC_N_ITER, RANSAC_MIN_IN, MIN_DISP_PX, THIN
+from globals import C_DIM, C_FEAT_DBG
 
-def PCC(feature, target):
+def PCC2D(feature, target):
+    """
+    Calculates the pearson correlation separately for
+    the x and y axis
+    """
     f_x, f_y = (feature[:, 0], feature[:, 1])
     t_x, t_y = (target[:, 0], target[:, 1])
     corrx, _ = pearsonr(f_x, t_x)
     corry, _ = pearsonr(f_y, t_y)
-    return corrx, corry
+    return corrx if np.isfinite(corrx) else 0, corry if np.isfinite(corry) else 0
 
 def fit_circle_ransac(pts: np.ndarray):
     """
@@ -87,36 +92,52 @@ class TraceMatch:
         self.prev_gray = None
         self.history = []
 
-    def track_features(self, gray):
+    def track_features(self, gray: np.ndarray):
+        """
+        Tracks points in the images and tries
+        to find motion candidates
+        """
+
         # Track existing points using optical flow
         if self.prev_gray is not None and len(self.history) > 0:
             new_pts, st, _ = cv2.calcOpticalFlowPyrLK(
                 self.prev_gray, gray, self.prev_pts, None, **self._LK)
 
+            a = len(self.history)
             self.history = [
                 (pts.append(new_pts[i]), pts)[1]
                 for i, pts in enumerate(self.history)
                 if st[i] == 1
             ]
+            b = len(self.history)
+
+            print(f'{a} | {b}')
+            
             self.prev_pts = np.array([pts[-1] for pts in self.history], dtype=np.float32)
 
         # Detect all keypoints
         keypoints = self._fast.detect(gray, None)
 
-        # Remove duplicates in the deduplication window
+        # Remove keypoints inside deduplication window
+        tracked_pts = None
+        unique_keypoints = []
+
+        # Init tracked_pts/unique_keypoints with prev_pts or first keypoint
         if self.prev_pts is not None:
             tracked_pts = self.prev_pts.copy()
-            unique_keypoints = []
+        elif len(keypoints) > 2:
+            tracked_pts = np.array(keypoints[0].pt)
+            unique_keypoints = [keypoints[0]]
 
-            for kp in keypoints:
-                _kp = np.array(kp.pt)
+        for kp in keypoints:
+            _kp = np.array(kp.pt)
+            diffs = np.atleast_2d(np.abs(tracked_pts - _kp))
+            
+            if not np.any((diffs[:, 0] < DEDUPE_WIN) & (diffs[:, 1] < DEDUPE_WIN)):
+                unique_keypoints.append(kp)
+                tracked_pts = np.vstack([tracked_pts, _kp])
 
-                diffs = np.abs(tracked_pts - _kp)
-                if not np.any((diffs[:, 0] < DEDUPE_WIN) & (diffs[:, 1] < DEDUPE_WIN)):
-                    unique_keypoints.append(kp)
-                    tracked_pts = np.vstack([tracked_pts, _kp])
-
-            keypoints = unique_keypoints
+        keypoints = unique_keypoints
 
         # Add new keypoints to history
         self.history.extend([deque([np.array(kp.pt)], maxlen=self.W) for kp in keypoints])
@@ -138,19 +159,26 @@ class TraceMatch:
 
         return candidates
 
-    def draw_features(self, frame, candidates):
+    def draw_features(self, frame: np.ndarray, candidates: list[tuple]):
+        """
+        Function to draw all features found by track_features
+        Highlights all features that are motion candidates
+        """
         candidate_i = [i for i, _ in candidates]
 
         for i, pt in enumerate(self.prev_pts):
-            color = (255,0,0) if i in candidate_i else (0,255,0)
-            frame = cv2.circle(frame, (int(pt[0]), int(pt[1])), 2, color, -1)
-
-        return frame
+            color = C_FEAT_DBG if i in candidate_i else C_DIM
+            cv2.circle(frame, (int(pt[0]), int(pt[1])), 2, color, -1)
 
     def find_matches(self, candidates, targets, frame_rate, frame_time):
+        """
+        Function to find all matches using the pearson correlation
+        and ransac.
+        """
         matches = []
 
-        for target in targets:
+        for tid, target in enumerate(targets):
+            # Calculate trajectory for orbit/target
             target_x = target.trajectory_x(self.W, frame_rate, frame_time)
             target_y = target.trajectory_y(self.W, frame_rate, frame_time)
             target = np.array([(target_x[i], target_y[i]) for i in range(self.W)])
@@ -162,17 +190,20 @@ class TraceMatch:
                 if np.linalg.norm(pts) < MIN_DISP_PX:
                     continue
 
-                corrx, corry = PCC(pts, target)
+                # Calculate correlation
+                corrx, corry = PCC2D(pts, target)
                 if not (corrx > PEARSON_THRESH and corry > PEARSON_THRESH):
                     continue
             
+                # Calculate ransac
                 circle = fit_circle_ransac(pts)
                 if circle is None:
                     continue
-            
+
+                # Calculate circle coverage
                 cx_c, cy_c, r_c, _ = circle
                 if arc_coverage(pts, cx_c, cy_c) < MIN_ARC:
                     continue
             
-                matches.append({'fid': i, 'history': pts, 'circle': circle})
+                matches.append({'tid': tid, 'fid': i, 'history': pts, 'circle': circle})
         return matches

@@ -19,14 +19,14 @@ def initialise_roi(prev_g: np.ndarray, curr_g: np.ndarray,
 
     Steps (follow Eq. 1–7 in the paper):
       1. Compute trajectory vectors A = {a_i} from matched feature histories.
-      2. Find average unit vector → average angle θ̄; find D_min, D_max.
+      2. Find average unit vector -> average angle rho; find D_min, D_max.
       3. Compute dense Farnebäck OF.
-      4. Pixel mask: magnitude in [(1−TH_D)·D_min, (1+TH_D)·D_max]    (Eq. 6)
-                     angle within TH_ANGL of θ̄                         (Eq. 7)
+      4. Pixel mask: magnitude in [(1−TH_D) * D_min, (1+TH_D) * D_max]    (Eq. 6)
+                     angle within TH_ANGL of rho                          (Eq. 7)
       5. Seeded connected-component labelling from feature positions.
       6. Bounding box of the resulting component → initial ROI.
     """
-    # Step 1 & 2 ─────────────────────────────────────────────────────────────
+    # Step 1 & 2
     traj_vecs = []
     seed_pts  = []
     for hist in histories:
@@ -46,10 +46,10 @@ def initialise_roi(prev_g: np.ndarray, curr_g: np.ndarray,
     D_min, D_max = float(mags.min()), float(mags.max())
 
     units   = arr / (mags[:, None] + 1e-9)
-    avg_u   = units.mean(axis=0)                   # Eq. 2: ā
-    avg_ang = float(np.arctan2(avg_u[1], avg_u[0])) # θ̄ = ∠ā
+    avg_u   = units.mean(axis=0)
+    avg_ang = float(np.arctan2(avg_u[1], avg_u[0]))
 
-    # Step 3 ─────────────────────────────────────────────────────────────────
+    # Step 3
     flow = cv2.calcOpticalFlowFarneback(
         prev_g, curr_g, None,
         pyr_scale=0.5, levels=3, winsize=15,
@@ -58,7 +58,7 @@ def initialise_roi(prev_g: np.ndarray, curr_g: np.ndarray,
     flow_mag = np.sqrt(flow[..., 0]**2 + flow[..., 1]**2)
     flow_ang = np.arctan2(flow[..., 1], flow[..., 0])
 
-    # Step 4 – pixel mask  (Eq. 6–7) ─────────────────────────────────────────
+    # Step 4 - pixel mask  (Eq. 6–7)
     lo = max(0.3, (1.0 - TH_D) * D_min)
     hi = (1.0 + TH_D) * max(D_max, 0.5)
     mask_m = (flow_mag >= lo) & (flow_mag <= hi)
@@ -69,7 +69,7 @@ def initialise_roi(prev_g: np.ndarray, curr_g: np.ndarray,
 
     mask = (mask_m & mask_a).astype(np.uint8)
 
-    # Step 5 – seeded connected-component labelling ────────────────────────
+    # Step 5 - seeded connected-component labelling
     seed_mask = np.zeros((cam_h, cam_w), dtype=np.uint8)
     for sx, sy in seed_pts:
         x1, x2 = max(0, sx - 5), min(cam_w, sx + 5)
@@ -85,9 +85,9 @@ def initialise_roi(prev_g: np.ndarray, curr_g: np.ndarray,
 
     pts_in = np.argwhere(comp_mask == 1)
 
-    # Step 6 – bounding box ────────────────────────────────────────────────
+    # Step 6 - bounding box
     if pts_in.size == 0:
-        # Fallback: 30×30 px box around the feature seed (paper: "minimum ROI")
+        # Fallback: 30x30 px box around the feature seed (paper: "minimum ROI")
         sxs, sys_ = zip(*seed_pts)
         x1 = max(0, min(sxs) - 15)
         y1 = max(0, min(sys_) - 15)
@@ -117,15 +117,15 @@ class MedianFlowTracker:
     """
     Modified Median Flow tracker as described in the paper (§ "Tracking"):
 
-      • Tracks an ROI using a grid of LK-tracked points (Median Flow).
-      • Recalibrates the ROI periodically via dense OF to keep the bounding
+      - Tracks an ROI using a grid of LK-tracked points (Median Flow).
+      - Recalibrates the ROI periodically via dense OF to keep the bounding
         box tight around the body part / object.
-      • Records a position offset on recalibration so the cursor does not jump
+      - Records a position offset on recalibration so the cursor does not jump
         (paper: "the recalibration is unnoticeable to the user").
-      • Jitter filter: dynamic moving-window average  (Eq. 9).
+      - Jitter filter: dynamic moving-window average  (Eq. 9).
 
     The cursor position is computed as:
-      cursor = start_cursor + (roi_centre - initial_roi_centre) × cd_gain
+      cursor = start_cursor + (roi_centre - initial_roi_centre) * cd_gain
     which implements a relative, gain-scaled absolute control map.
     """
 
@@ -155,7 +155,7 @@ class MedianFlowTracker:
         self._last_recal  = time.time()
         self._last_moved  = time.time()        # used for idle detection
 
-    # ── public API ────────────────────────────────────────────────────────
+    # public API
 
     def update(self, g: np.ndarray, WIN_W, WIN_H) -> tuple:
         """Advance one frame.  Returns (cursor_x, cursor_y) in display coords."""
@@ -190,27 +190,27 @@ class MedianFlowTracker:
         if move > 1:
             self._last_moved = time.time()
 
-        # ── periodic recalibration ────────────────────────────────────────
+        # periodic recalibration
         t_now = time.time()
         if move > RECALIB_MOVE and (t_now - self._last_recal) > RECALIB_INT:
             self._recalibrate(g)
 
-        # ── raw ROI centre (cam coords) with offset compensation ──────────
+        # raw ROI centre (cam coords) with offset compensation
         raw_cx = self.roi[0] + self.roi[2] / 2.0 + self._off_x
         raw_cy = self.roi[1] + self.roi[3] / 2.0 + self._off_y
 
-        # ── cursor via CD-gain  (Eq. 8 applied as relative offset) ───────
+        # cursor via CD-gain  (Eq. 8 applied as relative offset)
         cur_x = self.start_cursor[0] + (raw_cx - self._roi0_cx) * self.cd_gain
         cur_y = self.start_cursor[1] + (raw_cy - self._roi0_cy) * self.cd_gain
         cur_x = float(np.clip(cur_x, 0, WIN_W - 1))
         cur_y = float(np.clip(cur_y, 0, WIN_H - 1))
 
-        # ── jitter filter  (Eq. 9) ────────────────────────────────────────
+        # jitter filter  (Eq. 9)
         if self._pos_hist:
             px, py = self._pos_hist[-1]
             dt = math.hypot(cur_x - px, cur_y - py)
             if dt < JITTER_DMIN:
-                # NB = NMAX − ⌊dt × NMAX / dMIN⌋
+                # NB = NMAX - ⌊dt * NMAX / dMIN⌋
                 nb     = max(1, JITTER_NMAX - int(dt * JITTER_NMAX / JITTER_DMIN))
                 recent = list(self._pos_hist)[-nb:] + [(cur_x, cur_y)]
                 cur_x  = float(np.mean([p[0] for p in recent]))
@@ -224,11 +224,11 @@ class MedianFlowTracker:
     def is_idle(self) -> bool:
         return (time.time() - self._last_moved) > IDLE_TIMEOUT
 
-    # ── recalibration (dense OF re-fit) ──────────────────────────────────
+    # recalibration (dense OF re-fit)
 
     def _recalibrate(self, g: np.ndarray):
         """
-        Re-run ROI detection using dense OF in a 2× neighbourhood.
+        Re-run ROI detection using dense OF in a 2x neighbourhood.
         Records offset so the cursor remains stable (paper: 'unnoticeable').
         """
         cx_pre = self.roi[0] + self.roi[2] / 2.0

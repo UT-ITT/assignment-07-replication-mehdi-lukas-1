@@ -3,18 +3,18 @@ import numpy as np
 # ----------
 # TraceMatch
 # ----------
-DEDUPE_WIN = 10
-MOTION_THRESHOLD = 4.0
+DEDUPE_WIN = 10         # Number of pixel in which features are deduplicated
+MOTION_THRESHOLD = 4.0  # threshold in px until feature is detected as moving
 PEARSON_THRESH = 0.98   # |Pearson r| threshold for accepting a match
 MIN_ARC        = 0.22   # minimum fraction of circle arc that must be covered
 RANSAC_N_ITER  = 120    # RANSAC iterations for circle fit
 RANSAC_MIN_IN  = 6      # minimum inliers to accept a circle fit
 MIN_DISP_PX    = 2.0    # minimum total displacement to consider a feature (px)
-THIN           = 0.03
+THIN           = 0.03   # threshold for ransac
 
-# -------
+# --------
 # Tracking
-# -------
+# --------
 TH_D    = 0.25           # distance tolerance for dense-OF pixel match (Eq. 6)
 TH_ANGL = np.pi / 8      # angle tolerance ≈ 22.5° (Eq. 7)
 MIN_ROI = 30             # fallback minimum ROI side length (px)
@@ -31,15 +31,23 @@ DWELL_TIME = 0.8         # seconds to dwell over a target to activate it
 # -------
 # Widgets
 # -------
-# seconds of stillness -> decouple
-IDLE_TIMEOUT = 3.0
-# seconds to dwell over a target to activate it
-DWELL_TIME = 0.8
+ORBIT_R     = 55    # radius of the orbit path (px, display coords)
+ORBIT_DOT_R = 13    # radius of the orbiting dot (px)
+ORBIT_T     = 2.5   # revolution period (seconds)
+
+DWELL_TIME = 0.8    # seconds to dwell over a target to activate it
+
+# ------
+# General
+# ------
+FONT_SIZE = 0.55    # fontsize used for drawing info text
+MENU_DELAY = 0.8    # seconds until menus accept input
 
 # ------
 # COLORS
 # ------
 
+C_ORBIT_RING = ( 55, 185,  55)
 C_ORBIT_DOT  = ( 20, 235,  20)
 C_CURSOR     = (  0, 215, 255)
 C_CURSOR_RIM = (  0, 140, 200)
